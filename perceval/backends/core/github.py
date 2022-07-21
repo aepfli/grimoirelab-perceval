@@ -51,6 +51,7 @@ from ...utils import DEFAULT_DATETIME, DEFAULT_LAST_DATETIME
 CATEGORY_ISSUE = "issue"
 CATEGORY_PULL_REQUEST = "pull_request"
 CATEGORY_REPO = 'repository'
+CATEGORY_RELEASE = 'release'
 
 GITHUB_URL = "https://github.com/"
 GITHUB_API_URL = "https://api.github.com"
@@ -113,7 +114,7 @@ class GitHub(Backend):
     """
     version = '0.27.0'
 
-    CATEGORIES = [CATEGORY_ISSUE, CATEGORY_PULL_REQUEST, CATEGORY_REPO]
+    CATEGORIES = [CATEGORY_ISSUE, CATEGORY_PULL_REQUEST, CATEGORY_REPO, CATEGORY_RELEASE]
 
     CLASSIFIED_FIELDS = [
         ['user_data'],
@@ -227,6 +228,8 @@ class GitHub(Backend):
             items = self.__fetch_issues(from_date, to_date)
         elif category == CATEGORY_PULL_REQUEST:
             items = self.__fetch_pull_requests(from_date, to_date)
+        elif category == CATEGORY_RELEASE:
+            items = self.__fetch_releases()
         else:
             items = self.__fetch_repo_info()
 
@@ -271,6 +274,8 @@ class GitHub(Backend):
         """
         if "forks_count" in item:
             return item['fetched_on']
+        elif "prerelease" in item:
+            return item['fetched_on']
         else:
             ts = item['updated_at']
             ts = str_to_datetime(ts)
@@ -289,6 +294,8 @@ class GitHub(Backend):
             category = CATEGORY_PULL_REQUEST
         elif "forks_count" in item:
             category = CATEGORY_REPO
+        elif "prerelease" in item:
+            category = CATEGORY_RELEASE
         else:
             category = CATEGORY_ISSUE
 
@@ -364,6 +371,21 @@ class GitHub(Backend):
                     pull[field + '_data'] = self.__get_pull_commits(pull['number'])
 
             yield pull
+
+    def __fetch_releases(self):
+        """Get release infos"""
+
+        raw_release = self.client.release()
+        releases = json.loads(raw_release)
+
+        fetched_on = datetime_utcnow()
+        latest = True
+        for release in releases:
+            if not release['prerelease'] and not release['draft']:
+                release['latest'] = latest
+                release['fetched_on'] = fetched_on.timestamp()
+                latest = False
+                yield release
 
     def __fetch_repo_info(self):
         """Get repo info about stars, watchers and forks"""
@@ -608,6 +630,7 @@ class GitHubClient(HttpClient, RateLimitHandler):
     RREACTIONS = 'reactions'
     RCOMMENTS = 'comments'
     RREPOS = 'repos'
+    RRELEASE = 'releases'
     RPULLS = 'pulls'
     RREQUESTED_REVIEWERS = 'requested_reviewers'
     RREVIEWS = 'reviews'
@@ -767,6 +790,16 @@ class GitHubClient(HttpClient, RateLimitHandler):
         """Get repository data"""
 
         path = urijoin(self.base_url, self.RREPOS, self.owner, self.repository)
+
+        r = self.fetch(path)
+        repo = r.text
+
+        return repo
+
+    def release(self):
+        """Get release information"""
+
+        path = urijoin(self.base_url, self.RREPOS, self.owner, self.repository, self.RRELEASE)
 
         r = self.fetch(path)
         repo = r.text

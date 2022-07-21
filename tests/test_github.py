@@ -44,7 +44,8 @@ import httpretty
 import pkg_resources
 import requests
 
-pkg_resources.declare_namespace('perceval.backends')
+if not os.getenv("PYCHARM_HOSTED"):
+    pkg_resources.declare_namespace('perceval.backends')
 
 from grimoirelab_toolkit.datetime import datetime_utcnow
 from perceval.backend import BackendCommandArgumentParser
@@ -57,7 +58,7 @@ from perceval.backends.core.github import (logger, GitHub,
                                            CATEGORY_ISSUE,
                                            CATEGORY_PULL_REQUEST,
                                            CATEGORY_REPO,
-                                           MAX_CATEGORY_ITEMS_PER_PAGE)
+                                           MAX_CATEGORY_ITEMS_PER_PAGE, CATEGORY_RELEASE)
 from base import TestCaseBackendArchive
 
 
@@ -66,6 +67,7 @@ GITHUB_RATE_LIMIT = GITHUB_API_URL + "/rate_limit"
 GITHUB_REPO_URL = GITHUB_API_URL + "/repos/zhquan_example/repo"
 GITHUB_ISSUES_URL = GITHUB_REPO_URL + "/issues"
 GITHUB_PULL_REQUEST_URL = GITHUB_REPO_URL + "/pulls"
+GITHUB_RELEASES_URL = GITHUB_REPO_URL + "/releases"
 GITHUB_ISSUE_1_COMMENTS_URL = GITHUB_ISSUES_URL + "/1/comments"
 GITHUB_ISSUE_COMMENT_1_REACTION_URL = GITHUB_ISSUES_URL + "/comments/1/reactions"
 GITHUB_ISSUE_2_REACTION_URL = GITHUB_ISSUES_URL + "/2/reactions"
@@ -141,7 +143,7 @@ class TestGitHubBackend(unittest.TestCase):
         self.assertEqual(github.tag, 'test')
         self.assertEqual(github.max_items, MAX_CATEGORY_ITEMS_PER_PAGE)
         self.assertFalse(github.exclude_user_data)
-        self.assertEqual(github.categories, [CATEGORY_ISSUE, CATEGORY_PULL_REQUEST, CATEGORY_REPO])
+        self.assertEqual(github.categories, [CATEGORY_ISSUE, CATEGORY_PULL_REQUEST, CATEGORY_REPO, CATEGORY_RELEASE])
         self.assertTrue(github.ssl_verify)
 
         # When tag is empty or None it will be set to the value in origin
@@ -1095,6 +1097,61 @@ class TestGitHubBackend(unittest.TestCase):
         self.assertEqual(repo_info['data']['subscribers_count'], 2904)
         self.assertEqual(repo_info['data']['updated_at'], "2019-02-14T16:21:58Z")
         self.assertEqual(repo_info['data']['fetched_on'], 1483228800.0)
+
+    @httpretty.activate
+    @unittest.mock.patch('perceval.backends.core.github.datetime_utcnow')
+    def test_fetch_releases(self, mock_utcnow):
+        """Test whether release information is returned"""
+
+        mock_utcnow.return_value = datetime.datetime(2017, 1, 1,
+                                                     tzinfo=dateutil.tz.tzutc())
+
+        body = read_file('data/github/github_release')
+        rate_limit = read_file('data/github/rate_limit')
+
+        httpretty.register_uri(httpretty.GET,
+                               GITHUB_RATE_LIMIT,
+                               body=rate_limit,
+                               status=200,
+                               forcing_headers={
+                                   'X-RateLimit-Remaining': '20',
+                                   'X-RateLimit-Reset': '15'
+                               })
+
+        httpretty.register_uri(httpretty.GET,
+                               GITHUB_RELEASES_URL,
+                               body=body,
+                               status=200,
+                               forcing_headers={
+                                   'X-RateLimit-Remaining': '20',
+                                   'X-RateLimit-Reset': '15'
+                               })
+
+        github = GitHub("zhquan_example", "repo", "aaa")
+        repo = [repo for repo in github.fetch(category=CATEGORY_RELEASE)]
+
+        self.assertEqual(len(repo), 1)
+
+        repo_info = repo[0]
+
+        self.assertEqual(repo_info['origin'], 'https://github.com/zhquan_example/repo')
+        self.assertEqual(repo_info['uuid'], '58c073fd2a388c44043b9cc197c73c5c540270ac')
+        self.assertEqual(repo_info['updated_on'], 1483228800.0)
+        self.assertEqual(repo_info['category'], CATEGORY_RELEASE)
+        self.assertEqual(repo_info['tag'], 'https://github.com/zhquan_example/repo')
+        self.assertEqual(repo_info['data']['name'], "v1.0.0")
+        self.assertEqual(repo_info['data']['tag_name'], "v1.0.0")
+        self.assertEqual(repo_info['data']['created_at'], "2013-02-27T19:35:32Z")
+        self.assertEqual(repo_info['data']['fetched_on'], 1483228800.0)
+
+        assets = repo_info['data']['assets']
+        self.assertEqual(len(assets), 1)
+
+        asset_info = assets[0]
+        self.assertEqual(asset_info["state"], "uploaded")
+        self.assertEqual(asset_info["download_count"], 42)
+        self.assertEqual(asset_info["name"], "example.zip")
+        self.assertEqual(asset_info["size"], 1024)
 
     @httpretty.activate
     @unittest.mock.patch('perceval.backends.core.github.datetime_utcnow')
@@ -3428,6 +3485,36 @@ class TestGitHubClient(unittest.TestCase):
         client = GitHubClient("zhquan_example", "repo", ["aaa"])
         raw_repo = client.repo()
         self.assertEqual(raw_repo, repo)
+
+        self.assertEqual(httpretty.last_request().headers["Authorization"], "token aaa")
+
+    @httpretty.activate
+    def test_release(self):
+        """Test repo API call"""
+
+        release = read_file('data/github/github_release')
+        rate_limit = read_file('data/github/rate_limit')
+
+        httpretty.register_uri(httpretty.GET,
+                               GITHUB_RATE_LIMIT,
+                               body=rate_limit,
+                               status=200,
+                               forcing_headers={
+                                   'X-RateLimit-Remaining': '20',
+                                   'X-RateLimit-Reset': '15'
+                               })
+
+        httpretty.register_uri(httpretty.GET,
+                               GITHUB_RELEASES_URL,
+                               body=release, status=200,
+                               forcing_headers={
+                                   'X-RateLimit-Remaining': '5',
+                                   'X-RateLimit-Reset': '5'
+                               })
+
+        client = GitHubClient("zhquan_example", "repo", ["aaa"])
+        raw_release = client.release()
+        self.assertEqual(raw_release, release)
 
         self.assertEqual(httpretty.last_request().headers["Authorization"], "token aaa")
 
